@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "catchtable-cli"
 version = "0.1.0"
-description = "캐치테이블 비공식 CLI"
+description = "캐치테이블 비공식 CLI — AI 에이전트 친화적 설계 (Agent DX)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

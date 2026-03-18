@@ -1,20 +1,27 @@
 # CatchTable CLI (ct)
 
 캐치테이블(CatchTable) 서비스를 터미널에서 이용할 수 있는 비공식 CLI 도구입니다.
-매장 검색, 상세 정보 조회 및 예약 관리 기능을 제공합니다.
-
-> **Note:** 현재 Placeholder API를 사용 중입니다. 실제 API 엔드포인트는 RE 후 교체 예정입니다.
+AI 에이전트 친화적 설계(Agent DX)를 적용하여 자동화 파이프라인에서도 안정적으로 동작합니다.
 
 ## 주요 기능
 
 - **매장 검색 (`search`)**: 위치, 음식 종류, 날짜, 인원수 기반 검색
+- **지역 검색 (`search region`)**: 지역 기반 매장 탐색
 - **매장 정보 (`shop info`)**: 특정 매장의 상세 정보 조회
-- **예약 관리 (`reserve`)**: 예약 생성 (구현 중)
-- **빈자리 알림 (`notify`)**: 취소 자리 실시간 알림 (구현 중)
+- **JSON-First 출력**: `--json` 플래그로 구조화된 JSON 출력
+- **스키마 자체검사**: `ct schema` 명령으로 입출력 스키마 확인
+- **입력 검증**: 잘못된 인자에 대해 명확한 오류 메시지 제공
+- **dry-run 모드**: 실제 API 호출 없이 요청 미리보기
 
 ## 설치
 
 Python 3.11 이상이 필요합니다.
+
+```bash
+pip install catchtable-cli
+```
+
+또는 소스에서 설치:
 
 ```bash
 git clone https://github.com/tellang/catchtable-cli.git
@@ -33,6 +40,9 @@ ct search "한우" --json
 
 # 매장 상세 정보
 ct shop info SHOP_ID
+
+# 스키마 확인
+ct schema
 
 # 버전 / 개요
 ct version
@@ -58,6 +68,8 @@ catchtable-cli/
 │   ├── client.py        # HTTP API 클라이언트
 │   ├── config.py        # 환경 변수 설정
 │   ├── models.py        # 데이터 모델
+│   ├── schema.py        # 입출력 스키마 정의
+│   ├── validate.py      # 입력 검증 로직
 │   └── commands/
 │       ├── __init__.py
 │       ├── search.py    # 검색 커맨드
