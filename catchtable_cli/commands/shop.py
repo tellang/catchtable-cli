@@ -1,3 +1,12 @@
+"""매장 정보 커맨드.
+
+Agent DX 원칙 적용:
+- 1. JSON-First Output: --format 옵션 (json/table/compact), stderr 분리
+- 2. Raw Payload Passthrough: --json-body, --params
+- 4. Input Hardening: alias 입력 검증
+- 5. Context Window Discipline: --fields
+- 6. Safety Rails: --dry-run
+"""
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +20,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from catchtable_cli.client import CatchTableAPIError, CatchTableClient
+from catchtable_cli.commands.search import OutputFormat
 from catchtable_cli.models import (
     ApiEnvelope,
     DaySlot,
@@ -18,13 +28,16 @@ from catchtable_cli.models import (
     ShopDetail,
     ValidUrlData,
 )
+from catchtable_cli.validate import sanitize_identifier
 
-console = Console()
+# stderr 전용 콘솔 (에러, 테이블 등 human-readable 출력)
+err_console = Console(stderr=True)
 
 shop_app = typer.Typer(help="매장 정보")
 
 
 def _format_http_status_error(exc: httpx.HTTPStatusError) -> str:
+    """HTTP 상태 오류 메시지를 사람이 읽기 좋은 형태로 변환."""
     body = (exc.response.text or "").strip()
     content_type = (exc.response.headers.get("content-type") or "").lower()
     if "text/html" in content_type or body.startswith("<!DOCTYPE html"):
@@ -37,6 +50,7 @@ def _format_http_status_error(exc: httpx.HTTPStatusError) -> str:
 
 
 def _extract_shop_payload(data: Any) -> dict[str, Any]:
+    """응답 데이터에서 매장 상세 딕셔너리를 추출합니다."""
     if isinstance(data, dict):
         nested = data.get("shop")
         if isinstance(nested, dict):
@@ -46,6 +60,7 @@ def _extract_shop_payload(data: Any) -> dict[str, Any]:
 
 
 def _extract_day_slot_payload(data: Any) -> list[dict[str, Any]]:
+    """응답 데이터에서 예약 슬롯 목록을 추출합니다."""
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     if isinstance(data, dict):
@@ -57,17 +72,85 @@ def _extract_day_slot_payload(data: Any) -> list[dict[str, Any]]:
 
 
 def _format_yymmdd(value: str | None) -> str:
+    """YYYYMMDD 형식의 날짜를 YYYY-MM-DD 형식으로 변환합니다."""
     if value and len(value) == 8 and value.isdigit():
         return f"{value[:4]}-{value[4:6]}-{value[6:]}"
     return value or "-"
 
 
+def _filter_fields(data: Any, fields: list[str]) -> Any:
+    """응답 데이터에서 지정된 필드만 추출합니다."""
+    if not fields:
+        return data
+    if isinstance(data, dict):
+        return {k: v for k, v in data.items() if k in fields}
+    if isinstance(data, list):
+        return [_filter_fields(item, fields) for item in data]
+    return data
+
+
+def _parse_params(params_str: str) -> dict[str, str]:
+    """'key=value,key2=value2' 형식의 파라미터 문자열을 딕셔너리로 변환."""
+    result: dict[str, str] = {}
+    for pair in params_str.split(","):
+        pair = pair.strip()
+        if "=" in pair:
+            k, _, v = pair.partition("=")
+            result[k.strip()] = v.strip()
+    return result
+
+
+def _exit_with_error(message: str, code: int = 1) -> None:
+    """에러 메시지를 stderr로 출력하고 종료."""
+    err_console.print(f"[red]{message}[/red]")
+    raise typer.Exit(code=code)
+
+
 @shop_app.command()
 def info(
     alias: str = typer.Argument(help="매장 alias (예: bornandbredoriginal)"),
-    as_json: bool = typer.Option(False, "--json", help="JSON 출력"),
+    fmt: OutputFormat = typer.Option(OutputFormat.json, "--format", "-f", help="출력 형식 (json/table/compact)"),
+    fields: str | None = typer.Option(None, "--fields", help="응답 필드 선택 (쉼표 구분, 예: shop_name,avg_rating)"),
+    json_body: str | None = typer.Option(None, "--json-body", help="요청 본문 JSON 직접 전달"),
+    params_override: str | None = typer.Option(None, "--params", help="API 쿼리 파라미터 오버라이드 (key=value 쉼표 구분)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="API 미호출, 요청 계획만 출력"),
 ) -> None:
     """alias를 shopRef로 변환한 뒤 매장 상세/예약 가능 날짜를 조회합니다."""
+    # 입력 검증 (원칙 4): alias는 식별자이므로 경로순회 문자도 거부
+    try:
+        alias = sanitize_identifier(alias, field_name="alias")
+    except ValueError as exc:
+        _exit_with_error(f"입력값 오류: {exc}")
+
+    # 쿼리 파라미터 오버라이드
+    extra_params: dict[str, str] = {}
+    if params_override:
+        extra_params = _parse_params(params_override)
+
+    # dry-run 모드 (원칙 6)
+    if dry_run:
+        plan = {
+            "command": "shop info",
+            "steps": [
+                {
+                    "step": 1,
+                    "method": "GET",
+                    "url": f"/api/v4/shops/{alias}",
+                    "params": extra_params or None,
+                    "note": "매장 상세 조회 (alias가 shopRef로 자동 처리됨)",
+                },
+                {
+                    "step": 2,
+                    "method": "GET",
+                    "url": "/api/reservation/v1/dining/day-slots",
+                    "params": {"shopRef": "<step1에서 획득한 shopRef>", **extra_params},
+                    "note": "예약 가능 날짜 조회",
+                },
+            ],
+        }
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+        return
+
     client = CatchTableClient()
 
     async def _run() -> dict[str, Any]:
@@ -98,17 +181,32 @@ def info(
         payload = asyncio.run(_run())
     except CatchTableAPIError as exc:
         code = exc.result_code if exc.result_code is not None else "API"
-        console.print(f"[red]API 오류: [{code}] {exc}[/red]")
-        raise typer.Exit(code=1) from exc
+        exit_code = 2 if str(code) in {"401", "UNAUTHORIZED", "AUTH"} else 1
+        _exit_with_error(f"API 오류: [{code}] {exc}", exit_code)
+        return
     except httpx.HTTPStatusError as exc:
-        console.print(f"[red]API 오류: {_format_http_status_error(exc)}[/red]")
-        raise typer.Exit(code=1) from exc
+        exit_code = 2 if exc.response.status_code == 401 else 1
+        _exit_with_error(f"API 오류: {_format_http_status_error(exc)}", exit_code)
+        return
     except httpx.RequestError as exc:
-        console.print(f"[red]요청 실패: {exc}[/red]")
-        raise typer.Exit(code=1) from exc
+        _exit_with_error(f"요청 실패: {exc}")
+        return
 
-    if as_json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    # 필드 필터링 (원칙 5)
+    field_list = [f.strip() for f in fields.split(",")] if fields else []
+
+    if fmt == OutputFormat.json:
+        # stdout에 JSON 출력 (파이프 호환)
+        if field_list:
+            shop_data = payload["shop"].get("data", {})
+            vo = shop_data.get("shopDetailVO", shop_data) if isinstance(shop_data, dict) else {}
+            shop = ShopDetail.model_validate(vo)
+            shop_dict = shop.model_dump(exclude_none=True)
+            filtered = _filter_fields(shop_dict, field_list)
+            output = {"ok": True, "alias": alias, "shop": filtered}
+        else:
+            output = payload
+        print(json.dumps(output, ensure_ascii=False, indent=2))
         return
 
     shop_data = payload["shop"].get("data", {})
@@ -135,6 +233,30 @@ def info(
         price_parts.append(f"저녁 {shop.dinner_price}")
     price_text = " / ".join(price_parts) if price_parts else "-"
 
+    if fmt == OutputFormat.compact:
+        # compact: 탭 구분 한 줄 출력
+        parts = [
+            shop.shop_name or alias,
+            category,
+            address,
+            rating,
+            review_count,
+            price_text,
+        ]
+        print("\t".join(parts))
+
+        if day_slots:
+            for slot in day_slots:
+                slot_parts = [
+                    _format_yymmdd(slot.visit_yymmdd),
+                    slot.status_code or "-",
+                    "Y" if slot.is_available else "N",
+                    str(slot.remaining_count) if slot.remaining_count is not None else "-",
+                ]
+                print("\t".join(slot_parts))
+        return
+
+    # table 형식 (stderr)
     content = (
         f"[bold]{shop.shop_name or alias}[/bold]\n"
         f"Alias: {alias}\n"
@@ -146,10 +268,10 @@ def info(
         f"전화: {shop.phone_number or '-'}\n"
         f"설명: {shop.short_introduction or '-'}"
     )
-    console.print(Panel(content, title="매장 상세"))
+    err_console.print(Panel(content, title="매장 상세"))
 
     if not day_slots:
-        console.print("[yellow]예약 가능 날짜 정보가 없습니다.[/yellow]")
+        err_console.print("[yellow]예약 가능 날짜 정보가 없습니다.[/yellow]")
         return
 
     table = Table(title=f"예약 가능 날짜 ({len(day_slots)}건)")
@@ -172,4 +294,4 @@ def info(
             str(slot.remaining_count) if slot.remaining_count is not None else "-",
         )
 
-    console.print(table)
+    err_console.print(table)

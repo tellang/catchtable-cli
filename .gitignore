@@ -5,3 +5,12 @@ dist/
 *.egg-info/
 .env
 .mypy_cache/
+
+# AI 에이전트 설정 파일 (로컬 전용)
+CLAUDE.md
+GEMINI.md
+AGENTS.md
+SKILL.md
+
+# 이슈 트래킹 (로컬 전용)
+docs/issues/
