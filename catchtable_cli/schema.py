@@ -26,6 +26,7 @@ _COMMAND_SCHEMAS: dict[str, dict[str, Any]] = {
             "--json-body": {"type": "string", "default": None, "description": "요청 본문 JSON 직접 전달"},
             "--params": {"type": "string", "default": None, "description": "API 쿼리 파라미터 오버라이드 (key=value 쉼표 구분)"},
             "--dry-run": {"type": "boolean", "default": False, "description": "API 미호출, 요청 계획만 출력"},
+            "--suggest": {"type": "boolean", "default": False, "description": "결과 없을 시 유사 키워드 자동 제안 (Smart Search)"},
         },
         "response_model": AutocompleteData.model_json_schema(),
         "exit_codes": {
@@ -50,6 +51,7 @@ _COMMAND_SCHEMAS: dict[str, dict[str, Any]] = {
             "--json-body": {"type": "string", "default": None, "description": "요청 본문 JSON 직접 전달"},
             "--params": {"type": "string", "default": None, "description": "API 쿼리 파라미터 오버라이드 (key=value 쉼표 구분)"},
             "--dry-run": {"type": "boolean", "default": False, "description": "API 미호출, 요청 계획만 출력"},
+            "--suggest": {"type": "boolean", "default": False, "description": "결과 없을 시 유사 키워드 자동 제안 (Smart Search)"},
         },
         "response_model": SearchListData.model_json_schema(),
         "shop_model": SearchShop.model_json_schema(),

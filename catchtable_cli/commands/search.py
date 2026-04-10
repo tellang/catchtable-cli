@@ -78,6 +78,40 @@ def _exit_with_error(message: str, code: int = 1) -> None:
     raise typer.Exit(code=code)
 
 
+def _smart_suggest(client: CatchTableClient, keyword: str) -> list[str]:
+    """키워드의 부분 문자열로 자동완성 API를 재시도하여 유사 키워드를 수집합니다.
+
+    Agent DX 원칙 8: Smart Search — 결과 0건 시 did-you-mean 제안.
+    """
+    candidates: list[str] = []
+
+    async def _try_prefixes() -> None:
+        try:
+            # 키워드의 앞 1~(N-1) 글자로 부분 검색
+            for length in range(max(1, len(keyword) - 1), 0, -1):
+                prefix = keyword[:length]
+                try:
+                    result = await client.autocomplete(query=prefix)
+                    data = result.get("data", {}) or {}
+                    items = data.get("suggestions") or data.get("items") or data.get("list") or []
+                    for item in items[:5]:
+                        label = item.get("label", "") if isinstance(item, dict) else ""
+                        if label and label not in candidates:
+                            candidates.append(label)
+                    if candidates:
+                        break
+                except Exception:
+                    continue
+        finally:
+            await client.close()
+
+    try:
+        asyncio.run(_try_prefixes())
+    except Exception:
+        pass
+    return candidates[:5]
+
+
 @search_app.command()
 def search(
     keyword: str = typer.Argument(..., help="자동완성 키워드"),
@@ -87,6 +121,7 @@ def search(
     json_body: str | None = typer.Option(None, "--json-body", help="요청 본문 JSON 직접 전달 (기존 파라미터 덮어씀)"),
     params_override: str | None = typer.Option(None, "--params", help="API 쿼리 파라미터 오버라이드 (key=value 쉼표 구분)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="API 미호출, 요청 계획만 출력"),
+    suggest: bool = typer.Option(False, "--suggest", help="결과 없을 시 유사 키워드 자동 제안 (Smart Search)"),
 ) -> None:
     """자동완성 API로 검색 키워드 제안을 조회합니다."""
     # 입력 검증 (원칙 4)
@@ -154,9 +189,15 @@ def search(
         output = payload
         if field_list:
             data_part = (output.get("data") or {})
-            suggestions = data_part.get("suggestions") or data_part.get("items") or data_part.get("list") or []
-            filtered = [_filter_fields(s, field_list) for s in suggestions[:limit]]
+            items = data_part.get("suggestions") or data_part.get("items") or data_part.get("list") or []
+            filtered = [_filter_fields(s, field_list) for s in items[:limit]]
             output = {"ok": True, "items": filtered, "total": len(filtered)}
+            # Smart Search (원칙 8): JSON 모드에서도 결과 0건 시 제안
+            if not filtered and suggest and len(keyword) > 1:
+                hint_client = CatchTableClient()
+                hints = _smart_suggest(hint_client, keyword)
+                if hints:
+                    output["suggestions"] = hints
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return
 
@@ -164,6 +205,17 @@ def search(
     suggestions = (envelope.data or AutocompleteData()).suggestions[:limit]
 
     if not suggestions:
+        # Smart Search (원칙 8): 결과 없을 시 유사 키워드 제안
+        if suggest and len(keyword) > 1:
+            hint_suggestions = _smart_suggest(client, keyword)
+            if hint_suggestions:
+                if fmt == OutputFormat.json:
+                    output = {"ok": True, "items": [], "total": 0, "suggestions": hint_suggestions}
+                    print(json.dumps(output, ensure_ascii=False, indent=2))
+                    return
+                err_console.print("[yellow]자동완성 결과가 없습니다.[/yellow]")
+                err_console.print(f"[cyan]혹시 이 키워드를 찾으셨나요?[/cyan] {', '.join(hint_suggestions)}")
+                return
         err_console.print("[yellow]자동완성 결과가 없습니다.[/yellow]")
         return
 
@@ -207,6 +259,7 @@ def region(
     json_body: str | None = typer.Option(None, "--json-body", help="요청 본문 JSON 직접 전달 (기존 파라미터 덮어씀)"),
     params_override: str | None = typer.Option(None, "--params", help="API 쿼리 파라미터 오버라이드 (key=value 쉼표 구분)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="API 미호출, 요청 계획만 출력"),
+    suggest: bool = typer.Option(False, "--suggest", help="결과 없을 시 유사 키워드 자동 제안 (Smart Search)"),
 ) -> None:
     """지역 기반 매장 검색을 수행합니다."""
     # 입력 검증 (원칙 4)
@@ -324,6 +377,14 @@ def region(
     shops = [SearchShop.from_shop_result(s) for s in raw_shops]
 
     if not shops:
+        # Smart Search (원칙 8): 결과 없을 시 유사 키워드 제안
+        if suggest and len(region_name) > 1:
+            hint_client = CatchTableClient()
+            hints = _smart_suggest(hint_client, region_name)
+            if hints:
+                err_console.print("[yellow]검색 결과가 없습니다.[/yellow]")
+                err_console.print(f"[cyan]혹시 이 키워드를 찾으셨나요?[/cyan] {', '.join(hints)}")
+                return
         err_console.print("[yellow]검색 결과가 없습니다.[/yellow]")
         return
 
